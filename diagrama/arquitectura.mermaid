@@ -1,0 +1,91 @@
+graph TD
+    %% Estilos Generales
+    classDef source fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef ingest fill:#bbf,stroke:#333,stroke-width:2px;
+    classDef storage fill:#bfb,stroke:#333,stroke-width:2px;
+    classDef process fill:#fbb,stroke:#333,stroke-width:2px;
+    classDef consume fill:#ffb,stroke:#333,stroke-width:2px;
+    classDef orchestrate fill:#ddf,stroke:#333,stroke-width:2px;
+
+    %% Orígenes de Datos (Sources)v
+    subgraph Fuentes ["1. Orígenes de Datos"]
+        api[API REST Externa <br/>- JSON Anidado-]:::source
+        sftp[Servidor SFTP <br/>- CSV y JSON-]:::source
+        web[Plataforma Web <br/>- Eventos Real-time-]:::source
+        docs[Documentos de Soporte <br/>- Manuales en GCS-]:::source
+    end
+
+    %% Capa de Ingesta (Ingestion)
+    subgraph Ingesta ["2. Ingesta y Captura (Ingestion)"]
+        pubsub[Cloud Pub/Sub <br/>- Mensajería-]:::ingest
+        crun_api[Cloud Run / Function <br/>- Ingestión API-]:::ingest
+        sftp_transfer[Storage Transfer Service / <br/> Cloud Run SFTP Sync]:::ingest
+    end
+
+    %% Capa de Procesamiento y Almacenamiento (Lakehouse)
+    subgraph Storage ["3. Data Lakehouse Layers (Storage & Processing)"]
+        gcs_bronze[(GCS Raw / Bronze <br/>- JSON, CSV, TXT-)]:::storage
+        gcs_dlq[(GCS DLQ <br/>- Errores/Esquemas-)]:::storage
+        
+        dataflow[Cloud Dataflow <br/>- Streaming & Batch-]:::process
+        crun_transform[Cloud Run Transformation <br/>- Pandas, PyArrow-]:::process
+        
+        gcs_silver[(GCS Silver <br/>- Parquet Particionado-)]:::storage
+        bq_silver[(BigQuery Staging / Silver <br/>- Tablas Aplanadas-)]:::storage
+        bq_gold[(BigQuery Analytics / Gold <br/>- Modelos Dimensionales-)]:::storage
+    end
+
+    %% Capa Orquestación
+    subgraph Orquestacion ["4. Orquestación y Calidad"]
+        composer[Cloud Composer / Airflow <br/>- DAGs, Triggers-]:::orchestrate
+        quality[Validación de Calidad <br/>- Great Expectations / Pydantic-]:::orchestrate
+    end
+
+    %% Capa de Consumo y AI (Analytics & Generative AI)
+    subgraph Consumo ["5. Consumo e Inteligencia Artificial"]
+        looker[Looker Studio / BI <br/>- Tableros-]:::consume
+        crun_rag[Agente RAG / Vertex AI <br/>- Gemini API-]:::consume
+        vertex_vs[(Vertex AI Vector Search <br/>- Embeddings-)]:::consume
+        bq_vs[(BigQuery Vector Search)]:::consume
+    end
+
+    %% Flujos de Datos
+    api -->|Peticiones HTTP - Batch| crun_api
+    sftp -->|Archivos Nocturnos| sftp_transfer
+    web -->|Eventos de Clickstream| pubsub
+    docs -->|Subida de Archivos| gcs_bronze
+
+    crun_api -->|Guardado Raw| gcs_bronze
+    sftp_transfer -->|Guardado Raw| gcs_bronze
+    pubsub -->|Suscripción push/pull| dataflow
+
+    dataflow -->|Streaming clean| bq_silver
+    dataflow -->|Streaming Raw Backup| gcs_bronze
+
+    gcs_bronze -->|Lectura raw| crun_transform
+    crun_transform -->|Validación Calidad| quality
+    quality -->|Registros Inválidos| gcs_dlq
+    quality -->|Registros Válidos| crun_transform
+
+    crun_transform -->|Escritura Parquet| gcs_silver
+    crun_transform -->|Carga Incremental| bq_silver
+
+    bq_silver -->|Merge SCD Tipo 2 / Modelado| bq_gold
+
+    %% Flujo AI (Documentos a Embeddings)
+    gcs_bronze -->|Lectura Documentos| crun_transform
+    crun_transform -->|Chunking & Vertex AI Embeddings| vertex_vs
+    crun_transform -->|Carga Embeddings| bq_vs
+
+    %% Consumo final
+    bq_gold -->|Consultas Analíticas| looker
+    vertex_vs -->|Búsqueda Semántica| crun_rag
+    bq_vs -->|Búsqueda Semántica| crun_rag
+    bq_gold -->|Metadatos de Clientes| crun_rag
+    crun_rag -->|Generación de Respuestas| User[Usuario Final / Soporte]:::consume
+
+    %% Relaciones de Orquestación
+    composer -.->|Monitoreo y Trigger| crun_api
+    composer -.->|Trigger Ingesta Batch| sftp_transfer
+    composer -.->|Ejecución de SQL| bq_silver
+    composer -.->|Ejecución de SQL| bq_gold
